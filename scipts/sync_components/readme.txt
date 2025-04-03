@@ -86,3 +86,33 @@ SCRIPTS_COMMIT_DEFAULT = True
 - python3 manage.py reindex (пересчитывает созданные компоненты)
 
 Обновляем страничку и видим, что информация корректна.
+
+UPDATE 03.04.2025
+
+Однако не совсем удобно запускать скрипт каждый раз вручную.
+
+Самым простым способом автоматизации оказался способ с помощью Event Rules. Но данный способ требует изменения скрипта.
+
+Порядок действий:
+1. Добавляем новый скрипт через Web - main_w_event.py
+2. Operations > Event Rules > Add
+    - Имя
+    - Object Types: печатаем Template и выбираем:
+        DCIM | console port template
+        DCIM | console server port template
+        DCIM | interface template
+        DCIM | power port template
+        DCIM | module bay template
+    - Event Types:
+        Object created
+        Object updated
+        Object deleted
+    - Type - Script
+    - Script - Fix Device Components (main_w_event)
+    - Action data:
+         	{
+                "commit": true
+            }
+    - Save
+
+ Готово! Теперь скрипт будет автоматически срабатывать при указанных ивентах.
