@@ -1,4 +1,4 @@
-В NetBox v4.2.4 присутствует следующая проблема:
+В NetBox v4.2.4 обнаружили следующую проблему:
 Eсли есть существующий Device привязанный к Device Type.
 Далее если мы добавим в Device Type, например, Interface, Power port или Console Port, или Module Bay, то у этого Device информация не обновится автоматически.
 Как оказалось, это дефолтное поведение.
@@ -21,7 +21,7 @@ https://github.com/netbox-community/customizations/blob/master/scripts/add_devic
      Далее добавляем следущий текст:
 ```
 [Unit]
-Description=NetBox RQ Worker
+Description=NetBox RQ Workerz
 After=network.target
 
 [Service]
