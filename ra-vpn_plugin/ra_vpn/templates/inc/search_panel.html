@@ -1,0 +1,24 @@
+<form method="get" class="form form-horizontal" id="filter-form">
+  <div class="row mb-3">
+    <div class="col-md-4">
+      <input type="text" name="q" value="{{ request.GET.q }}" class="form-control" placeholder="Search..." />
+    </div>
+    <div class="col-md-8 text-end">
+      <button type="submit" class="btn btn-primary">Search</button>
+      <a href="?" class="btn btn-secondary">Reset</a>
+    </div>
+  </div>
+
+  {% if filter.form %}
+  <div class="row">
+    {% for field in filter.form.visible_fields %}
+    <div class="col-md-3">
+      <div class="form-group">
+        <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+        {{ field }}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</form>

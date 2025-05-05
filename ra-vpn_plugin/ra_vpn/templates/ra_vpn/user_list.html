@@ -1,0 +1,16 @@
+{% extends "generic/object_list.html" %}
+
+{% block title %}RA-VPN Users{% endblock %}
+
+{% block content %}
+  {# Title and Import button #}
+  <div class="mb-2">
+    <h1> </h1>
+    <a href="{% url 'plugins:ra_vpn:vpnuser_import' %}" class="btn btn-outline-primary btn-sm">
+      <i class="mdi mdi-upload"></i> Import
+    </a>
+  </div>
+
+  {# Default table content #}
+  {{ block.super }}
+{% endblock %}
