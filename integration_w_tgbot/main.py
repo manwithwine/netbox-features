@@ -358,7 +358,7 @@ async def handle_category_selection(update: Update, context: CallbackContext) ->
         # Fetch all inventory items
         items = list(netbox.dcim.inventory_items.all())
     except Exception as e:
-        logger.error(f"Ошибка Netbox: {e}, просьба обратиться на demo_adm@rubytech.ru")
+        logger.error(f"Ошибка Netbox: {e}, просьба обратиться на ur_mail_server")
         await update.message.reply_text("❌ Пу пу пупу", reply_markup=main_keyboard)
         return TAKE
 

@@ -1,0 +1,138 @@
+{% extends "base/layout.html" %}
+{% load buttons %}
+
+{% block title %}Backup Config{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col col-md-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5>Config Backups for {{ device.name }}</h5>
+                <div class="d-flex gap-2 align-items-center">
+                    {% if device.primary_ip or device.oob_ip %}
+                        <a href="{% url 'plugins:netbox_config_backup:collect_backup' device_id=device.id %}"
+                           class="btn btn-info btn-sm">
+                            <i class="mdi mdi-download"></i> Collect Now
+                        </a>
+                        <a href="{% url 'plugins:netbox_config_backup:enable_backup' device_id=device.id %}"
+                           class="btn btn-success btn-sm">
+                            <i class="mdi mdi-play"></i> Collect Auto
+                        </a>
+                        <a href="{% url 'plugins:netbox_config_backup:disable_backup' device_id=device.id %}"
+                           class="btn btn-danger btn-sm">
+                            <i class="mdi mdi-stop"></i> Disable
+                        </a>
+                        <a href="{% url 'dcim:device' pk=device.id %}"
+                           class="btn btn-secondary btn-sm">
+                            <i class="mdi mdi-arrow-left"></i> Return
+                        </a>
+                    {% else %}
+                        <span class="text-danger">No IP address configured</span>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <strong>Last Collection Status:</strong>
+                    {% if latest %}
+                        <span class="badge bg-{% if latest.status == 'Backup Enabled' %}success{% elif latest.status == 'Collected' %}info{% else %}danger{% endif %} text-white">
+                            {{ latest.status }}
+                        </span>
+                        <small class="text-white ms-2">{{ latest.last_checked|date:"Y-m-d H:i:s" }}</small>
+                        {% if latest.collection_mode == 'AUTO' %}
+                            <span class="badge bg-primary text-white ms-2">Auto</span>
+                        {% else %}
+                            <span class="badge bg-secondary text-white ms-2">Manual</span>
+                        {% endif %}
+                        {% if latest.last_status %}
+                            <div class="text-muted small mt-1">
+                                {% if 'Disabled by user' in latest.last_status %}
+                                    Disabled by {{ request.user.username }}
+                                {% elif 'Deleted by user' in latest.last_status %}
+                                    Deleted by {{ request.user.username }}
+                                {% else %}
+                                    {{ latest.last_status }}
+                                {% endif %}
+                            </div>
+                        {% endif %}
+                    {% else %}
+                        <span class="badge bg-danger text-white">Backup Disabled</span>
+                    {% endif %}
+                </div>
+
+                <form method="get" action="{% url 'plugins:netbox_config_backup:config_diff' %}" id="compare-form">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th width="40"><input type="checkbox" id="select-all"></th>
+                                <th>Timestamp</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for backup in backups %}
+                                {% if backup.config %}
+                                <tr>
+                                    <td><input type="checkbox" name="selected" value="{{ backup.id }}"></td>
+                                    <td>{{ backup.created|date:"Y-m-d H:i:s" }}</td>
+                                    <td>
+                                        {% if 'Deleted by user' in backup.last_status %}
+                                            Deleted by {{ request.user.username }}
+                                        {% else %}
+                                            {{ backup.last_status }}
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <a href="{% url 'plugins:netbox_config_backup:view_config' device_id=device.id backup_id=backup.id %}"
+                                           class="btn btn-primary btn-sm">View Config</a>
+                                    </td>
+                                </tr>
+                                {% endif %}
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    <input type="hidden" name="device" value="{{ device.id }}">
+                    <div class="mt-2">
+                        <button type="submit" class="btn btn-warning btn-sm" id="compare-btn" disabled>
+                            <i class="mdi mdi-compare"></i> Compare Selected
+                        </button>
+                        <button type="submit" formaction="{% url 'plugins:netbox_config_backup:delete_backups' device_id=device.id %}" 
+                                formmethod="post" class="btn btn-danger btn-sm ms-2" id="delete-btn" disabled>
+                            <i class="mdi mdi-trash-can-outline"></i> Delete Selected
+                        </button>
+                        {% csrf_token %}
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const checkboxes = document.querySelectorAll('input[name="selected"]');
+    const compareBtn = document.getElementById('compare-btn');
+    const deleteBtn = document.getElementById('delete-btn');
+    const selectAll = document.getElementById('select-all');
+
+    // Toggle all checkboxes
+    selectAll.addEventListener('change', (e) => {
+        checkboxes.forEach(cb => {
+            cb.checked = e.target.checked;
+        });
+        updateButtonStates();
+    });
+
+    // Update button states when checkboxes change
+    checkboxes.forEach(cb => {
+        cb.addEventListener('change', updateButtonStates);
+    });
+
+    function updateButtonStates() {
+        const selected = document.querySelectorAll('input[name="selected"]:checked');
+        compareBtn.disabled = selected.length !== 2;
+        deleteBtn.disabled = selected.length === 0;
+    }
+</script>
+{% endblock %}
