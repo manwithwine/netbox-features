@@ -1,0 +1,251 @@
+{% extends "base/layout.html" %}
+{% load helpers %}
+
+{% block title %}RA-VPN Group{% endblock %}
+
+{% block content %}
+<div class="row mb-3">
+    <div class="col col-md-12">
+        <div class="card">
+            <h5 class="card-header d-flex justify-content-between align-items-center">
+                RA-Group: {{ object.name }}
+                <div class="btn-group btn-group-sm">
+                    <a href="{% url 'plugins:ra_vpn:vpngroup_edit' pk=object.pk %}" class="btn btn-warning">
+                        <i class="mdi mdi-pencil"></i> Edit
+                    </a>
+                    <a href="{% url 'plugins:ra_vpn:vpngroup_delete' pk=object.pk %}" class="btn btn-danger">
+                        <i class="mdi mdi-trash-can-outline"></i> Delete
+                    </a>
+                </div>
+            </h5>
+            <div class="card-body">
+                <table class="table table-hover">
+                    <tr>
+                        <th>Tenant</th>
+                        <td>{% if object.tenant %}<a href="{% url 'tenancy:tenant' pk=object.tenant.pk %}">{{ object.tenant.name }}</a>{% else %}-{% endif %}</td>
+                    </tr>
+                    <tr>
+                        <th>ACL</th>
+                        <td>
+                            <div style="max-height: 200px; overflow-y: auto; border: 1px solid #dee2e6; padding: 8px; border-radius: 4px;">
+                                {{ object.acl|linebreaksbr }}
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>Attribute</th>
+                        <td>
+                            <div style="max-height: 200px; overflow-y: auto; border: 1px solid #dee2e6; padding: 8px; border-radius: 4px;">
+                                {{ object.attribute|linebreaksbr }}
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>Owner</th>
+                        <td>
+                            {% if object.owner %}
+                            <a href="{% url 'tenancy:contact' pk=object.owner.pk %}">{{ object.owner }}</a>
+                            {% else %}-{% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>Deputy</th>
+                        <td>
+                            {% if object.deputy %}
+                            <a href="{% url 'tenancy:contact' pk=object.deputy.pk %}">{{ object.deputy }}</a>
+                            {% else %}-{% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>Purpose</th>
+                        <td>
+                            <div style="max-height: 150px; overflow-y: auto; border: 1px solid #dee2e6; padding: 8px; border-radius: 4px;">
+                                {{ object.purpose|linebreaksbr }}
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>TTL</th>
+                        <td>{{ object.formatted_ttl|default:"-" }}</td>
+                    </tr>
+                    <tr>
+                        <th>Owner Audit</th>
+                        <td>{{ object.formatted_owneraudit|default:"-" }}</td>
+                    </tr>
+                    <tr>
+                        <th>Admin Audit</th>
+                        <td>{{ object.formatted_adminaudit|default:"-" }}</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-3">
+    <div class="col col-md-12">
+        <div class="card">
+            <h5 class="card-header d-flex justify-content-between align-items-center">
+                Associated Users
+                <div class="btn-group btn-group-sm">
+                    <button onclick="toggleAllPasswords()" class="btn btn-outline-secondary">
+                        <i class="mdi mdi-eye"></i> Show/Hide All
+                    </button>
+                    <button onclick="copyAllCredentials()" class="btn btn-outline-primary">
+                        <i class="mdi mdi-content-copy"></i> Copy All
+                    </button>
+                </div>
+            </h5>
+            <div class="card-body">
+                {% if object.users.exists %}
+                <div style="max-height: 400px; overflow-y: auto;">
+                    <table class="table table-hover" id="usersTable">
+                        <thead>
+                            <tr>
+                                <th>Username</th>
+                                <th style="min-width: 200px;">Password</th>
+                                <th>Status</th>
+                                <th>Full Name</th>
+                                <th>Email</th>
+                                <th>Company</th>
+                                <th>Static IP</th>
+                                <th>Description</th>
+                                <th>TTL</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for user in object.users.all %}
+                            <tr>
+                                <td><a href="{% url 'plugins:ra_vpn:vpnuser' pk=user.pk %}">{{ user.username }}</a></td>
+                                <td>
+                                    <input type="password" value="{{ user.password }}" 
+                                           class="password-field form-control" 
+                                           style="width: 50%; min-width: 200px;" 
+                                           readonly>
+                                </td>
+                                <td>
+                                    <span class="badge bg-{% if user.status == 'active' %}success{% else %}warning{% endif %}">
+                                        {{ user.get_status_display }}
+                                    </span>
+                                </td>
+                                <td>{{ user.fullname }}</td>
+                                <td>{{ user.email }}</td>
+                                <td>{{ user.company|default:"-" }}</td>
+                                <td>{{ user.static_ip|default:"-" }}</td>
+                                <td>{{ user.description|default:"-" }}</td>
+                                <td>{{ user.formatted_ttl|default:"-" }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-muted">No users associated with this group.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function toggleAllPasswords() {
+    const passwordFields = document.querySelectorAll('.password-field');
+    const showButton = document.querySelector('.card-header .btn-outline-secondary');
+    const icon = showButton.querySelector('i');
+
+    const anyVisible = Array.from(passwordFields).some(field => field.type === 'text');
+
+    passwordFields.forEach(field => {
+        field.type = anyVisible ? 'password' : 'text';
+    });
+
+    icon.className = anyVisible ? 'mdi mdi-eye' : 'mdi mdi-eye-off';
+}
+
+function copyAllCredentials() {
+    const rows = document.querySelectorAll('#usersTable tbody tr');
+
+    const usernameWidth = 15;
+    const passwordWidth = 20;
+    const fullnameWidth = 20;
+    const emailWidth = 25;
+    const companyWidth = 20;
+    const statusWidth = 15;
+    const ttlWidth = 15;
+    const staticIpWidth = 15;
+    const descriptionWidth = 25;
+
+    let plainText = 
+        padRight("Login", usernameWidth) +
+        padRight("Password", passwordWidth) +
+        padRight("Full Name", fullnameWidth) +
+        padRight("Email", emailWidth) +
+        padRight("Company", companyWidth) +
+        padRight("Status", statusWidth) +
+        padRight("Static IP", staticIpWidth) +
+        padRight("Description", descriptionWidth) +
+        padRight("TTL", ttlWidth) + "\n";
+
+    rows.forEach(row => {
+        const cells = row.querySelectorAll('td');
+        const username = cells[0]?.textContent.trim() || '';
+        const password = cells[1]?.querySelector('input')?.value || '';
+        const fullname = cells[2]?.textContent.trim() || '';
+        const email = cells[3]?.textContent.trim() || '';
+        const company = cells[4]?.textContent.trim() || '';
+        const status = cells[5]?.textContent.trim() || '';
+        const staticIp = cells[6]?.textContent.trim() || '';
+        const description = cells[7]?.textContent.trim() || '';
+        const ttl = cells[8]?.textContent.trim() || '';
+
+        plainText += 
+            padRight(username, usernameWidth) +
+            padRight(password, passwordWidth) +
+            padRight(fullname, fullnameWidth) +
+            padRight(email, emailWidth) +
+            padRight(company, companyWidth) +
+            padRight(status, statusWidth) +
+            padRight(staticIp, staticIpWidth) +
+            padRight(description, descriptionWidth) +
+            padRight(ttl, ttlWidth) + "\n";
+    });
+
+    copyTextToClipboard(plainText);
+    showCopyFeedback();
+}
+
+function padRight(text, width) {
+    text = text || "";
+    if (text.length >= width) return text.slice(0, width - 1) + " ";
+    return text + " ".repeat(width - text.length);
+}
+
+function copyTextToClipboard(text) {
+    const textarea = document.createElement('textarea');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    textarea.value = text;
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+
+    document.execCommand('copy');
+
+    document.body.removeChild(textarea);
+}
+
+function showCopyFeedback() {
+    const button = document.querySelector('.btn-outline-primary');
+    const originalHTML = button.innerHTML;
+    button.innerHTML = '<i class="mdi mdi-check"></i> Copied!';
+    button.classList.remove('btn-outline-primary');
+    button.classList.add('btn-success');
+
+    setTimeout(() => {
+        button.innerHTML = originalHTML;
+        button.classList.remove('btn-success');
+        button.classList.add('btn-outline-primary');
+    }, 2000);
+}
+</script>
+{% endblock %}
