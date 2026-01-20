@@ -1,152 +1,280 @@
 from dcim.models import (
-    Device, ConsolePort, PowerPort, ModuleBay, Interface,
-    ConsolePortTemplate, PowerPortTemplate, ModuleBayTemplate, InterfaceTemplate,
-    DeviceType
+    Device,
+    ConsolePort, ConsoleServerPort, PowerPort, ModuleBay, Interface,
+    ConsolePortTemplate, ConsoleServerPortTemplate, PowerPortTemplate, ModuleBayTemplate, InterfaceTemplate,
+    DeviceType,
 )
 from extras.scripts import Script
 from django.db import transaction
-from django.core.cache import cache
 import time
 
 
 class FixDeviceComponents(Script):
     class Meta:
         name = "Update Device Components via Event Rules"
-        description = "Creates missing components when device type changes via Event Rules. Do not delete components."
+        description = "Sync device components with device type templates (create/update/delete) when templates change."
 
     def run(self, data, commit):
         total_start = time.time()
-        self.log_info("⚙️ Starting component fix script")
+        self.log_info("⚙️ Starting component sync script")
+
+        # NetBox может передать null, если Action data пустое
+        data = data or {}
 
         try:
-            # Extract device type ID from Event Rule data
-            if isinstance(data.get('device_type'), dict):
-                device_type_id = data['device_type']['id']
-            elif isinstance(data.get('device_type'), (int, str)):
-                device_type_id = int(data['device_type'])
-            else:
-                raise ValueError("Could not determine device type ID from input data")
+            device_type = self._get_device_type_from_event_data(data)
+            if not device_type:
+                self.log_failure(
+                    "❌ Could not determine device_type from event data. "
+                    "Fix: set Event Rule Action data to {} (not empty)."
+                )
+                self.log_info(f"🔎 Incoming data was: {data!r}")
+                return "No device_type in event data"
 
-            # Get all devices of this type
-            devices = Device.objects.filter(device_type_id=device_type_id)
-            self.log_info(f"Found {devices.count()} devices of type ID {device_type_id}")
+            self.log_info(f"🔄 Processing device type: {device_type} (ID: {device_type.id})")
 
-            processed_count = 0
+            devices = Device.objects.filter(device_type_id=device_type.id)
+            self.log_info(f"📱 Found {devices.count()} devices of type {device_type}")
+
+            totals = {"created": 0, "updated": 0, "deleted": 0, "devices": 0}
+
             for device in devices:
                 device_start = time.time()
-                self.log_info(f"\n🔧 Processing device: {device.name} (ID: {device.id})")
+                self.log_info(f"\n🔧 Device: {device.name} (ID: {device.id})")
 
                 with transaction.atomic():
-                    # Process all component types
-                    counts = {
-                        'console': self._process_component(
-                            device, ConsolePort, ConsolePortTemplate, "console ports"
-                        ),
-                        'power': self._process_component(
-                            device, PowerPort, PowerPortTemplate, "power ports"
-                        ),
-                        'module': self._process_module_bays(device),
-                        'interfaces': self._process_interfaces(device)
-                    }
+                    # Console ports
+                    c, u, d = self._sync_simple_components(
+                        device=device,
+                        model=ConsolePort,
+                        templates=ConsolePortTemplate.objects.filter(device_type=device_type),
+                        fields=("type", "description"),
+                        label="ConsolePort",
+                    )
+                    totals["created"] += c
+                    totals["updated"] += u
+                    totals["deleted"] += d
 
-                    if commit:
-                        self._force_update_counts(device)
-                        self._verify_counts(device, counts)
-                        processed_count += 1
+                    # Console server ports
+                    c, u, d = self._sync_simple_components(
+                        device=device,
+                        model=ConsoleServerPort,
+                        templates=ConsoleServerPortTemplate.objects.filter(device_type=device_type),
+                        fields=("label", "physical_label", "type", "description"),
+                        label="ConsoleServerPort",
+                    )
+                    totals["created"] += c
+                    totals["updated"] += u
+                    totals["deleted"] += d
 
-                device_time = time.time() - device_start
-                self.log_success(f"✅ Completed in {device_time:.2f}s")
+                    # Power ports
+                    c, u, d = self._sync_simple_components(
+                        device=device,
+                        model=PowerPort,
+                        templates=PowerPortTemplate.objects.filter(device_type=device_type),
+                        fields=("type", "description"),
+                        label="PowerPort",
+                    )
+                    totals["created"] += c
+                    totals["updated"] += u
+                    totals["deleted"] += d
+
+                    # Interfaces (с твоими полями)
+                    c, u, d = self._sync_interfaces(device, device_type)
+                    totals["created"] += c
+                    totals["updated"] += u
+                    totals["deleted"] += d
+
+                    # Module bays
+                    c, u, d = self._sync_module_bays(device, device_type)
+                    totals["created"] += c
+                    totals["updated"] += u
+                    totals["deleted"] += d
+
+                totals["devices"] += 1
+                self.log_success(f"✅ Device done in {time.time() - device_start:.2f}s")
 
             total_time = time.time() - total_start
-            self.log_success(f"\n🏁 Script completed in {total_time:.2f} seconds")
-            self.log_success(f"📊 Successfully processed {processed_count}/{devices.count()} devices")
+            result = (
+                f"Done for DeviceType {device_type} (id={device_type.id}). "
+                f"Devices: {totals['devices']}/{devices.count()}. "
+                f"Created={totals['created']}, Updated={totals['updated']}, Deleted={totals['deleted']}. "
+                f"Time={total_time:.2f}s"
+            )
+            self.log_success(f"\n🏁 {result}")
+            return result
 
         except Exception as e:
-            self.log_failure(f"❌ Script failed: {str(e)}")
+            import traceback
+            self.log_failure(f"❌ Script failed: {e}")
+            self.log_failure(traceback.format_exc())
             raise
 
-    def _process_component(self, device, model, template_model, component_name):
-        """Create missing components based on templates"""
-        existing = set(model.objects.filter(device=device).values_list('name', flat=True))
-        templates = template_model.objects.filter(device_type=device.device_type)
+    # ---------- event data parsing ----------
 
-        created = 0
-        for template in templates:
-            if template.name not in existing:
-                model.objects.create(
-                    device=device,
-                    name=template.name,
-                    type=template.type,
-                    description=template.description
-                )
+    def _get_device_type_from_event_data(self, data):
+        dt = None
+        if isinstance(data, dict):
+            dt = data.get("device_type")
+            if dt is None and isinstance(data.get("data"), dict):
+                dt = data["data"].get("device_type")
+
+        device_type_id = None
+        if isinstance(dt, dict):
+            device_type_id = dt.get("id")
+        elif isinstance(dt, int):
+            device_type_id = dt
+        elif isinstance(dt, str) and dt.isdigit():
+            device_type_id = int(dt)
+
+        if not device_type_id:
+            return None
+
+        return DeviceType.objects.filter(id=device_type_id).first()
+
+    # ---------- generic sync ----------
+
+    def _sync_simple_components(self, device, model, templates, fields, label):
+        """
+        Синхронизация по name:
+          - create отсутствующие
+          - update указанные поля
+          - delete лишние
+        """
+        templates_by_name = {t.name: t for t in templates}
+        existing_by_name = {o.name: o for o in model.objects.filter(device=device)}
+
+        created = updated = deleted = 0
+
+        for name, tpl in templates_by_name.items():
+            obj = existing_by_name.get(name)
+            if not obj:
+                kwargs = {"device": device, "name": tpl.name}
+                for f in fields:
+                    if hasattr(tpl, f):
+                        kwargs[f] = getattr(tpl, f)
+                model.objects.create(**kwargs)
                 created += 1
-                self.log_info(f"➕ Created {component_name}: {template.name}")
-        return created
+                self.log_info(f"  ➕ Created {label}: {name}")
+            else:
+                changed = False
+                for f in fields:
+                    if hasattr(obj, f) and hasattr(tpl, f):
+                        new_val = getattr(tpl, f)
+                        if getattr(obj, f) != new_val:
+                            setattr(obj, f, new_val)
+                            changed = True
+                if changed:
+                    obj.save()
+                    updated += 1
+                    self.log_info(f"  ✏️ Updated {label}: {name}")
 
-    def _process_interfaces(self, device):
-        """Create missing interfaces"""
-        existing = set(Interface.objects.filter(device=device).values_list('name', flat=True))
-        templates = InterfaceTemplate.objects.filter(device_type=device.device_type)
+        extra_names = set(existing_by_name.keys()) - set(templates_by_name.keys())
+        if extra_names:
+            qs = model.objects.filter(device=device, name__in=extra_names)
+            cnt = qs.count()
+            qs.delete()
+            deleted += cnt
+            for n in sorted(extra_names):
+                self.log_info(f"  🗑️ Deleted {label}: {n}")
 
-        created = 0
-        for template in templates:
-            if template.name not in existing:
-                Interface.objects.create(
-                    device=device,
-                    name=template.name,
-                    type=template.type,
-                    mgmt_only=template.mgmt_only,
-                    description=template.description
-                )
+        return created, updated, deleted
+
+    # ---------- Interface sync with your fields ----------
+
+    def _sync_interfaces(self, device, device_type):
+        templates = InterfaceTemplate.objects.filter(device_type=device_type)
+        templates_by_name = {t.name: t for t in templates}
+        existing_by_name = {i.name: i for i in Interface.objects.filter(device=device)}
+
+        # Ты перечислил эти поля
+        fields = (
+            "type",
+            "description",
+            "bridge",
+            "poe_mode",
+            "poe_type",
+            "wireless_role",
+        )
+
+        created = updated = deleted = 0
+
+        for name, tpl in templates_by_name.items():
+            obj = existing_by_name.get(name)
+            if not obj:
+                kwargs = {"device": device, "name": tpl.name}
+                # безопасно: добавляем только реально существующие поля
+                for f in fields:
+                    if hasattr(tpl, f):
+                        kwargs[f] = getattr(tpl, f)
+                Interface.objects.create(**kwargs)
                 created += 1
-        return created
+                self.log_info(f"  ➕ Created Interface: {name}")
+            else:
+                changed = False
+                for f in fields:
+                    if hasattr(obj, f) and hasattr(tpl, f):
+                        new_val = getattr(tpl, f)
+                        if getattr(obj, f) != new_val:
+                            setattr(obj, f, new_val)
+                            changed = True
+                if changed:
+                    obj.save()
+                    updated += 1
+                    self.log_info(f"  ✏️ Updated Interface: {name}")
 
-    def _process_module_bays(self, device):
-        """Create missing module bays"""
-        existing = set(ModuleBay.objects.filter(device=device).values_list('name', flat=True))
-        templates = ModuleBayTemplate.objects.filter(device_type=device.device_type)
+        extra_names = set(existing_by_name.keys()) - set(templates_by_name.keys())
+        if extra_names:
+            qs = Interface.objects.filter(device=device, name__in=extra_names)
+            cnt = qs.count()
+            qs.delete()
+            deleted += cnt
+            for n in sorted(extra_names):
+                self.log_info(f"  🗑️ Deleted Interface: {n}")
 
-        created = 0
-        for template in templates:
-            if template.name not in existing:
-                ModuleBay.objects.create(
-                    device=device,
-                    name=template.name,
-                    label=template.label,
-                    position=template.position
-                )
+        return created, updated, deleted
+
+    # ---------- ModuleBay sync ----------
+
+    def _sync_module_bays(self, device, device_type):
+        templates = ModuleBayTemplate.objects.filter(device_type=device_type)
+        templates_by_name = {t.name: t for t in templates}
+        existing_by_name = {m.name: m for m in ModuleBay.objects.filter(device=device)}
+
+        fields = ("label", "position", "description")
+
+        created = updated = deleted = 0
+
+        for name, tpl in templates_by_name.items():
+            obj = existing_by_name.get(name)
+            if not obj:
+                kwargs = {"device": device, "name": tpl.name}
+                for f in fields:
+                    if hasattr(tpl, f):
+                        kwargs[f] = getattr(tpl, f)
+                ModuleBay.objects.create(**kwargs)
                 created += 1
-                self.log_info(f"➕ Created module bay: {template.name}")
-        return created
+                self.log_info(f"  ➕ Created ModuleBay: {name}")
+            else:
+                changed = False
+                for f in fields:
+                    if hasattr(obj, f) and hasattr(tpl, f):
+                        new_val = getattr(tpl, f)
+                        if getattr(obj, f) != new_val:
+                            setattr(obj, f, new_val)
+                            changed = True
+                if changed:
+                    obj.save()
+                    updated += 1
+                    self.log_info(f"  ✏️ Updated ModuleBay: {name}")
 
-    def _force_update_counts(self, device):
-        """Update device component counts"""
-        cache_keys = [
-            f'device_{device.id}_components',
-            f'device_{device.id}_counts',
-            'device_component_counts',
-            'device_full_components'
-        ]
-        for key in cache_keys:
-            cache.delete(key)
+        extra_names = set(existing_by_name.keys()) - set(templates_by_name.keys())
+        if extra_names:
+            qs = ModuleBay.objects.filter(device=device, name__in=extra_names)
+            cnt = qs.count()
+            qs.delete()
+            deleted += cnt
+            for n in sorted(extra_names):
+                self.log_info(f"  🗑️ Deleted ModuleBay: {n}")
 
-        device.console_port_count = ConsolePort.objects.filter(device=device).count()
-        device.power_port_count = PowerPort.objects.filter(device=device).count()
-        device.module_bay_count = ModuleBay.objects.filter(device=device).count()
-        device.interface_count = Interface.objects.filter(device=device).count()
-        device.save()
-        device.refresh_from_db()
-
-    def _verify_counts(self, device, created_counts):
-        """Verify component counts"""
-        actual_counts = {
-            'console': ConsolePort.objects.filter(device=device).count(),
-            'power': PowerPort.objects.filter(device=device).count(),
-            'module': ModuleBay.objects.filter(device=device).count(),
-            'interfaces': Interface.objects.filter(device=device).count()
-        }
-
-        self.log_success("\n📊 Count Verification:")
-        self.log_success(f"Console Ports: Created {created_counts['console']} | Total: {actual_counts['console']}")
-        self.log_success(f"Power Ports: Created {created_counts['power']} | Total: {actual_counts['power']}")
-        self.log_success(f"Module Bays: Created {created_counts['module']} | Total: {actual_counts['module']}")
+        return created, updated, deleted
